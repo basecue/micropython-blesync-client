@@ -1,8 +1,6 @@
 from collections import namedtuple
-import struct
 
 import blesync
-import bluetooth
 from micropython import const
 
 _ADV_TYPE_FLAGS = const(0x01)
@@ -31,36 +29,54 @@ _ADV_TYPE_APPEARANCE = const(0x19)
 # 0x04 - SCAN_RSP - scan
 # response
 
-
-def decode_field(payload, adv_type):
+def split_data(payload):
     i = 0
     result = []
-    while i + 1 < len(payload):
-        if payload[i + 1] == adv_type:
-            result.append(payload[i + 2: i + payload[i] + 1])
-        i += 1 + payload[i]
+    data = memoryview(payload)
+    len_data = len(data)
+    while i < len_data:
+        length = data[i]
+        result.append(data[i:length + 1])
+        i += length
     return result
 
 
-def decode_name(payload):
-    n = decode_field(payload, _ADV_TYPE_NAME)
-    return str(n[0], "utf-8") if n else ""
+def decode_data(data_list):
+    return {
+        d[0]: d[1:]
+        for d in data_list
+    }
 
 
-def decode_services(payload):
-    services = []
-    for u in decode_field(payload, _ADV_TYPE_UUID16_COMPLETE):
-        services.append(bluetooth.UUID(struct.unpack("<h", u)[0]))
-    for u in decode_field(payload, _ADV_TYPE_UUID32_COMPLETE):
-        services.append(bluetooth.UUID(struct.unpack("<d", u)[0]))
-    for u in decode_field(payload, _ADV_TYPE_UUID128_COMPLETE):
-        services.append(bluetooth.UUID(u))
-    return services
+# def decode_field(payload, adv_type):
+#     i = 0
+#     result = []
+#     while i + 1 < len(payload):
+#         # if payload[i + 1] == adv_type:
+#         result.append(payload[i + 2: i + payload[i] + 1])
+#         i += 1 + payload[i]
+#     return result
+
+
+# def decode_name(payload):
+#     n = decode_field(payload, _ADV_TYPE_NAME)
+#     return str(n[0], "utf-8") if n else ""
+
+
+# def decode_services(payload):
+#     services = []
+#     for u in decode_field(payload, _ADV_TYPE_UUID16_COMPLETE):
+#         services.append(bluetooth.UUID(struct.unpack("<h", u)[0]))
+#     for u in decode_field(payload, _ADV_TYPE_UUID32_COMPLETE):
+#         services.append(bluetooth.UUID(struct.unpack("<d", u)[0]))
+#     for u in decode_field(payload, _ADV_TYPE_UUID128_COMPLETE):
+#         services.append(bluetooth.UUID(u))
+#     return services
 
 
 BLEDevice = namedtuple(
     'BLEDevice',
-    ('addr_type', 'addr', 'name', 'adv_type', 'rssi', 'services')
+    ('addr_type', 'addr', 'name', 'adv_type', 'rssi',)
 )
 
 BLEService = namedtuple(
@@ -101,9 +117,16 @@ class BLEClient:
             30000,
             30000
         ):
-            services = decode_services(adv_data)
-            name = decode_name(adv_data)
-            adv_type_flags = decode_field(adv_data, _ADV_TYPE_FLAGS)
+            data_list = decode_data(split_data(adv_data))
+
+            try:
+                encoded_name = data_list[_ADV_TYPE_NAME]
+            except KeyError:
+                name = ""
+            else:
+                name = str(encoded_name, "utf-8")
+
+            adv_type_flags = data_list[_ADV_TYPE_FLAGS]
 
             # addr buffer is owned by caller so need to copy it.
             addr_copy = bytes(addr)
@@ -113,7 +136,6 @@ class BLEClient:
                 name=name,
                 adv_type=adv_type_flags,
                 rssi=rssi,
-                services=services
             )
 
     def connect(self, addr_type, addr):
