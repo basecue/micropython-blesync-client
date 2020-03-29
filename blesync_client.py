@@ -36,8 +36,8 @@ def split_data(payload):
     len_data = len(data)
     while i < len_data:
         length = data[i]
-        result.append(data[i:length + 1])
-        i += length
+        result.append(data[i + 1:i + 1 + length])
+        i += length + 1
     return result
 
 
