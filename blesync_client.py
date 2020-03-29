@@ -103,6 +103,7 @@ class BLEClient:
         ):
             services = decode_services(adv_data)
             name = decode_name(adv_data)
+            adv_type_flags = decode_field(adv_data, _ADV_TYPE_FLAGS)
 
             # addr buffer is owned by caller so need to copy it.
             addr_copy = bytes(addr)
@@ -110,7 +111,7 @@ class BLEClient:
                 addr_type=addr_type,
                 addr=addr_copy,
                 name=name,
-                adv_type=adv_type,
+                adv_type=adv_type_flags,
                 rssi=rssi,
                 services=services
             )
