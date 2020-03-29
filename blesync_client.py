@@ -29,7 +29,7 @@ _ADV_TYPE_APPEARANCE = const(0x19)
 # 0x04 - SCAN_RSP - scan
 # response
 
-def split_data(payload):
+def _split_data(payload):
     i = 0
     result = []
     data = memoryview(payload)
@@ -41,11 +41,24 @@ def split_data(payload):
     return result
 
 
-def decode_data(data_list):
+def parse_adv_data(payload):
     return {
         d[0]: d[1:]
-        for d in data_list
+        for d in _split_data(payload)
     }
+
+
+def decode_adv_name(data):
+    try:
+        encoded_name = data[_ADV_TYPE_NAME]
+    except KeyError:
+        return ''
+    else:
+        return str(encoded_name, "utf-8")
+
+
+def decode_adv_type(data):
+    return data[_ADV_TYPE_FLAGS][0]
 
 
 # def decode_field(payload, adv_type):
@@ -76,7 +89,7 @@ def decode_data(data_list):
 
 BLEDevice = namedtuple(
     'BLEDevice',
-    ('addr_type', 'addr', 'name', 'adv_type', 'rssi',)
+    ('addr_type', 'addr', 'adv_name', 'adv_type_flags', 'rssi',)
 )
 
 BLEService = namedtuple(
@@ -117,24 +130,17 @@ class BLEClient:
             30000,
             30000
         ):
-            data_list = decode_data(split_data(adv_data))
-
-            try:
-                encoded_name = data_list[_ADV_TYPE_NAME]
-            except KeyError:
-                name = ""
-            else:
-                name = str(encoded_name, "utf-8")
-
-            adv_type_flags = data_list[_ADV_TYPE_FLAGS]
+            parsed_data = parse_adv_data(adv_data)
+            adv_name = decode_adv_name(parsed_data)
+            adv_type_flags = decode_adv_type(parsed_data)
 
             # addr buffer is owned by caller so need to copy it.
             addr_copy = bytes(addr)
             yield BLEDevice(
                 addr_type=addr_type,
                 addr=addr_copy,
-                name=name,
-                adv_type=adv_type_flags,
+                adv_name=adv_name,
+                adv_type_flags=adv_type_flags,
                 rssi=rssi,
             )
 
