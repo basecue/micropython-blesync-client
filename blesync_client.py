@@ -1,10 +1,9 @@
 from collections import namedtuple
-
-from micropython import const
-import bluetooth
+import struct
 
 import blesync
-import struct
+import bluetooth
+from micropython import const
 
 _ADV_TYPE_FLAGS = const(0x01)
 _ADV_TYPE_NAME = const(0x09)
@@ -61,13 +60,34 @@ def decode_services(payload):
 
 BLEDevice = namedtuple(
     'BLEDevice',
-    ('addr_type', 'addr', 'name', 'connectable', 'rssi', 'services')
+    ('addr_type', 'addr', 'name', 'adv_type', 'rssi', 'services')
 )
 
 BLEService = namedtuple(
     'BLEService',
     ('start_handle', 'end_handle', 'uuid')
 )
+
+_ADV_IND = const(0x00)
+'''
+Known as Advertising Indications (ADV_IND), where a peripheral device requests connection to any central device (i.e., not directed at a particular central device).
+Example: A smart watch requesting connection to any central device.
+'''
+_ADV_DIRECT_IND = const(0x01)
+'''
+Similar to ADV_IND, yet the connection request is directed at a specific central device.
+Example: A smart watch requesting connection to a specific central device.
+'''
+_ADV_SCAN_IND = const(0x02)
+'''
+Similar to ADV_NONCONN_IND, with the option additional information via scan responses.
+Example: A warehouse pallet beacon allowing a central device to request additional information about the pallet. 
+'''
+_ADV_NONCONN_IND = const(0x03)
+'''
+Non connectable devices, advertising information to any listening device.
+Example: Beacons in museums defining proximity to specific exhibits.
+'''
 
 
 class BLEClient:
@@ -76,20 +96,21 @@ class BLEClient:
 
     def scan(self):
         blesync.active(True)
-        for addr_type, addr, connectable, rssi, adv_data in blesync.gap_scan(
+        for addr_type, addr, adv_type, rssi, adv_data in blesync.gap_scan(
             2000,
             30000,
             30000
         ):
             services = decode_services(adv_data)
             name = decode_name(adv_data)
+
             # addr buffer is owned by caller so need to copy it.
             addr_copy = bytes(addr)
             yield BLEDevice(
                 addr_type=addr_type,
                 addr=addr_copy,
                 name=name,
-                connectable=connectable,
+                adv_type=adv_type,
                 rssi=rssi,
                 services=services
             )
@@ -110,7 +131,6 @@ class BLEClient:
 
                 ret[uuid] = service
         return ret
-
 
     # def discover_characteristics(self, service: BLEService, callback):
     #     self._assert_active()
