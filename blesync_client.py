@@ -139,7 +139,7 @@ class BLEClient:
         ):
             for service_class in self._service_classes:
                 try:
-                    service = service_class(uuid, conn_handle)
+                    service = service_class(uuid, conn_handle, start_handle, end_handle)
                 except ValueError:
                     continue
 
