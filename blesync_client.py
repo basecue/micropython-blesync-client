@@ -104,9 +104,24 @@ Example: Beacons in museums defining proximity to specific exhibits.
 '''
 
 
+class ConnectedCharacteristic:
+    def __init__(self, service, conn_handle, value_handle):
+        self._service = service
+        self._name = name
+        self._conn_handle = conn_handle
+        self._value_handle = value_handle
+
+    def notify(self, data=None):
+        blesync.gatts_notify(self._conn_handle, self._value_handle, data)
+
+
+
+
+
 class BLEClient:
     def __init__(self, *service_classes):
         self._service_classes = service_classes
+        blesync.on_gatts_write(self._on_gatts_write)
 
     def scan(self):
         blesync.active(True)
@@ -133,18 +148,47 @@ class BLEClient:
         blesync.active(True)
         conn_handle = blesync.gap_connect(addr_type, addr)
 
-        ret = {}
         for start_handle, end_handle, uuid in blesync.gattc_discover_services(
             conn_handle
         ):
             for service_class in self._service_classes:
                 try:
-                    service = service_class(uuid, conn_handle, start_handle, end_handle)
+                    service = service_class(uuid)
                 except ValueError:
                     continue
 
-                ret[uuid] = service
-        return ret
+    def _on_gatts_write(self, conn_handle, value_handle):
+        self.characteristics[(conn_handle, value_handle)]
+
+    def _discover(self, service, conn_handle, start_handle, end_handle):
+        characteristics = service.get_characteristics()
+
+        for def_handle, value_handle, properties, uuid in blesync.gattc_discover_characteristics(
+            conn_handle, start_handle, end_handle
+        ):
+            for attr_name, characteristic in characteristics:
+                if characteristic.uuid != uuid:
+                    continue
+
+                characteristic_name, attr = characteristics[uuid]
+
+                connected_characteristic = ConnectedCharacteristic(
+                    service,
+                    conn_handle,
+                    value_handle,
+                )
+
+                setattr(
+                    service,
+                    characteristic_name,
+                    connected_characteristic
+                )
+
+                # if bluetooth.FLAG_WRITE & properties == 0:
+                # on_(characteristic_name)%_write_received
+                # self.handles[uuid] = value_handle
+                # if len(self.handles) == len(characteristics):
+                #     break
 
     # def discover_characteristics(self, service: BLEService, callback):
     #     self._assert_active()
