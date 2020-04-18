@@ -1,7 +1,8 @@
 from collections import namedtuple
 
-import blesync
 from micropython import const
+
+import blesync
 
 _ADV_TYPE_FLAGS = const(0x01)
 _ADV_TYPE_NAME = const(0x09)
@@ -58,9 +59,13 @@ def decode_adv_name(data):
 
 
 def decode_adv_type(data):
-    return data[_ADV_TYPE_FLAGS][0]
+    try:
+        return data[_ADV_TYPE_FLAGS][0]
+    except KeyError:
+        return None
 
 
+# TODO
 # def decode_services(payload):
 #     services = []
 #     for u in decode_field(payload, _ADV_TYPE_UUID16_COMPLETE):
@@ -104,100 +109,150 @@ Example: Beacons in museums defining proximity to specific exhibits.
 '''
 
 
-class ConnectedCharacteristic:
-    def __init__(self, service, conn_handle, value_handle):
-        self._service = service
-        self._name = name
-        self._conn_handle = conn_handle
-        self._value_handle = value_handle
+def scan():
+    blesync.active(True)
+    for addr_type, addr, adv_type, rssi, adv_data in blesync.gap_scan(
+        2000,
+        30000,
+        30000
+    ):
+        parsed_data = parse_adv_data(adv_data)
+        adv_name = decode_adv_name(parsed_data)
+        adv_type_flags = decode_adv_type(parsed_data)
 
-    def notify(self, data=None):
-        blesync.gatts_notify(self._conn_handle, self._value_handle, data)
-
-
-
+        # addr buffer is owned by caller so need to copy it.
+        addr_copy = bytes(addr)
+        yield BLEDevice(
+            addr_type=addr_type,
+            addr=addr_copy,
+            adv_name=adv_name,
+            adv_type_flags=adv_type_flags,
+            rssi=rssi,
+        )
 
 
 class BLEClient:
     def __init__(self, *service_classes):
         self._service_classes = service_classes
-        blesync.on_gatts_write(self._on_gatts_write)
-
-    def scan(self):
-        blesync.active(True)
-        for addr_type, addr, adv_type, rssi, adv_data in blesync.gap_scan(
-            2000,
-            30000,
-            30000
-        ):
-            parsed_data = parse_adv_data(adv_data)
-            adv_name = decode_adv_name(parsed_data)
-            adv_type_flags = decode_adv_type(parsed_data)
-
-            # addr buffer is owned by caller so need to copy it.
-            addr_copy = bytes(addr)
-            yield BLEDevice(
-                addr_type=addr_type,
-                addr=addr_copy,
-                adv_name=adv_name,
-                adv_type_flags=adv_type_flags,
-                rssi=rssi,
-            )
+        self._services = {}
+        blesync.on_gattc_notify(self._on_gattc_message)
+        blesync.on_gattc_indicate(self._on_gattc_message)
 
     def connect(self, addr_type, addr):
+        # TODO separate connect and service creation
         blesync.active(True)
         conn_handle = blesync.gap_connect(addr_type, addr)
 
+        if not self._service_classes:
+            return {}
+
+        ret = {}
         for start_handle, end_handle, uuid in blesync.gattc_discover_services(
             conn_handle
         ):
             for service_class in self._service_classes:
                 try:
-                    service = service_class(uuid)
+                    service = service_class(uuid, conn_handle, start_handle, end_handle)
                 except ValueError:
                     continue
+                else:
+                    self._services.setdefault(conn_handle, []).append(service)
+                    ret.setdefault(service_class, []).append(service)
+        return ret
 
-    def _on_gatts_write(self, conn_handle, value_handle):
-        self.characteristics[(conn_handle, value_handle)]
+    def _on_gattc_message(self, conn_handle, value_handle, notify_data):
+        try:
+            services = self._services[conn_handle]
+        except KeyError:
+            pass
+        else:
+            for service in services:
+                service._on_gattc_message(value_handle, notify_data)
 
-    def _discover(self, service, conn_handle, start_handle, end_handle):
-        characteristics = service.get_characteristics()
 
+class Characteristic:
+    def __init__(self, uuid):  # TODO flags
+        self.uuid = uuid
+        self._value_handles = {}
+        self.connected_characteristic = None
+        self._on_message_callback = lambda *_: None
+
+    def __get__(self, service, owner=None):
+        return ConnectedCharacteristic(
+            service.conn_handle,
+            self._value_handles[service]
+        )
+
+    def register(self, uuid, service, value_handle):
+        if uuid != self.uuid:
+            raise ValueError
+        self._value_handles[service] = value_handle
+
+    def __delete__(self, service):
+        del self._value_handles[service]
+
+    def on_message(self, callback):
+        self._on_message_callback = callback
+        return callback
+
+
+class ConnectedCharacteristic:
+    def __init__(self, conn_handle, value_handle):
+        self._conn_handle = conn_handle
+        self._value_handle = value_handle
+
+    def read(self, timeout_ms=None):
+        return blesync.gattc_read(
+            self._conn_handle,
+            self._value_handle,
+            timeout_ms
+        )
+
+    def write(self, data, ack=False, timeout_ms=None):
+        blesync.gattc_write(
+            self._conn_handle, self._value_handle, data, ack, timeout_ms
+        )
+
+
+class Service:
+    uuid = NotImplemented
+
+    @classmethod
+    def _get_characteristics(cls):
+        for name in dir(cls):
+            attr = getattr(cls, name)
+            if isinstance(attr, Characteristic):
+                yield attr
+
+    def __init__(self, uuid, conn_handle, start_handle, end_handle):
+        if uuid != self.uuid:
+            raise ValueError
+        characteristics = list(self._get_characteristics())
+        self._characteristics = {}
+        self.conn_handle = conn_handle
         for def_handle, value_handle, properties, uuid in blesync.gattc_discover_characteristics(
             conn_handle, start_handle, end_handle
         ):
-            for attr_name, characteristic in characteristics:
-                if characteristic.uuid != uuid:
+            for characteristic in characteristics:  # TODO enumerate
+                try:
+                    characteristic.register(uuid, self, value_handle)
+                except ValueError:
                     continue
+                else:
+                    self._characteristics[value_handle] = characteristic
+                    if len(self._characteristics) == len(characteristics):
+                        return
+                    break
 
-                characteristic_name, attr = characteristics[uuid]
+    def _on_gattc_message(self, value_handle, message):
+        characteristic = self._characteristics[value_handle]
+        characteristic._on_message_callback(self, message)
 
-                connected_characteristic = ConnectedCharacteristic(
-                    service,
-                    conn_handle,
-                    value_handle,
-                )
-
-                setattr(
-                    service,
-                    characteristic_name,
-                    connected_characteristic
-                )
-
-                # if bluetooth.FLAG_WRITE & properties == 0:
-                # on_(characteristic_name)%_write_received
-                # self.handles[uuid] = value_handle
-                # if len(self.handles) == len(characteristics):
-                #     break
-
-    # def discover_characteristics(self, service: BLEService, callback):
-    #     self._assert_active()
-    #
-    #     # TODO consider list
-    #     self._discover_characteristics_callback[service] = callback
-    #     _ble.gattc_discover_characteristics(
-    #         service.conn_handle, service.start_handle, service.end_handle
-    #     )
+        # if bluetooth.FLAG_WRITE & properties == 0:
+        # on_(characteristic_name)%_write_received
+        # self.handles[uuid] = value_handle
+        # if len(self.handles) == len(characteristics):
+        #     break
 
     # def disconnect(self, connection: BLEConnection, callback):
     #     self._assert_active()
