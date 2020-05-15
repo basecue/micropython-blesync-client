@@ -113,10 +113,9 @@ def scan(duration_ms, interval_us=None, window_us=None, timeout_ms=None):
         adv_type_flags = decode_adv_type_flags(parsed_data)
         adv_services = decode_adv_services(parsed_data)
         # addr buffer is owned by caller so need to copy it.
-        addr_copy = bytes(addr)
         yield BLEDevice(
             addr_type=addr_type,
-            addr=addr_copy,
+            addr=addr,
             adv_name=adv_name,
             adv_type_flags=adv_type_flags,
             rssi=rssi,
@@ -220,7 +219,7 @@ class Service:
     def __init__(self, uuid, conn_handle, start_handle, end_handle):
         if uuid != self.uuid:
             raise ValueError
-        characteristics = list(self._get_characteristics())
+        characteristics = self._get_characteristics()
         self._characteristics = {}
         self.conn_handle = conn_handle
         for def_handle, value_handle, properties, uuid in blesync.gattc_discover_characteristics(
