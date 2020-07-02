@@ -105,21 +105,25 @@ Device = namedtuple(
 
 def scan(duration_ms, interval_us=None, window_us=None):
     blesync.activate()
-    for addr_type, addr, adv_type, rssi, adv_data in blesync.gap_scan(
+    gap_scan_iter = blesync.gap_scan(
         duration_ms, interval_us=interval_us, window_us=window_us
-    ):
-        parsed_data = parse_adv_data(adv_data)
-        adv_name = decode_adv_name(parsed_data)
-        adv_type_flags = decode_adv_type_flags(parsed_data)
-        adv_services = decode_adv_services(parsed_data)
-        yield Device(
-            addr_type=addr_type,
-            addr=addr,
-            adv_name=adv_name,
-            adv_type_flags=adv_type_flags,
-            rssi=rssi,
-            services=adv_services,
-        )
+    )
+    try:
+        for addr_type, addr, adv_type, rssi, adv_data in gap_scan_iter:
+            parsed_data = parse_adv_data(adv_data)
+            adv_name = decode_adv_name(parsed_data)
+            adv_type_flags = decode_adv_type_flags(parsed_data)
+            adv_services = decode_adv_services(parsed_data)
+            yield Device(
+                addr_type=addr_type,
+                addr=addr,
+                adv_name=adv_name,
+                adv_type_flags=adv_type_flags,
+                rssi=rssi,
+                services=adv_services,
+            )
+    except GeneratorExit:
+        gap_scan_iter.close()
 
 
 class DeviceNotFound(Exception):
@@ -127,12 +131,15 @@ class DeviceNotFound(Exception):
 
 
 def find_device(name, duration_ms, interval_us=None, window_us=None):
-    for device in scan(
+    scan_iter = scan(
         duration_ms=duration_ms,
         interval_us=interval_us,
         window_us=window_us,
-    ):
+    )
+
+    for device in scan_iter:
         if device.adv_name == name:
+            scan_iter.close()
             return device
 
     raise DeviceNotFound()
